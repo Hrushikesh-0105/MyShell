@@ -255,7 +255,7 @@ void executeCommand(char* command[]){
             if(chdir(command[1])!=0){
                 //error occured while changing dir
                 // perror(command[0]); 
-                // printError();
+                printError();
             }
         }
     }
@@ -271,6 +271,7 @@ void executeCommand(char* command[]){
             //child process
             if(execvp(command[0], command)<0){
                 // perror(command[0]);
+                printError();
                 exit(EXIT_FAILURE);
             }
         }
@@ -310,6 +311,7 @@ void executeParallelCommands(ParsedCommand* cmd){
             else{
                 if(chdir(cmd->commands[i][1])!=0){
                     //error occured while changing dir
+                    printError();
                     // perror(cmd->commands[i][0]); 
                 }
             }
@@ -320,6 +322,7 @@ void executeParallelCommands(ParsedCommand* cmd){
 
         if(pids[i]<0){
             //fork failed
+            printError();
             // perror("");
             return;
         }
@@ -329,6 +332,7 @@ void executeParallelCommands(ParsedCommand* cmd){
             resetSignalHandlers();
             if (execvp(cmd->commands[i][0], cmd->commands[i]) < 0) {
                 // perror(cmd->commands[i][0]);
+                printError();
                 exit(EXIT_FAILURE);
             }
         }
@@ -348,6 +352,7 @@ void executeCommandRedirection(ParsedCommand* cmd) {
     pid_t pid = fork();
     if (pid < 0) {
         // perror("");
+        printError();
         return;
     }
     if (pid == 0) {
@@ -356,11 +361,13 @@ void executeCommandRedirection(ParsedCommand* cmd) {
         if (fd < 0) {
             // If open fails, raise error
             // perror("");
+            printError();
             exit(EXIT_FAILURE);
         }
         //changing the stdout to file fd
         if (dup2(fd, STDOUT_FILENO) < 0) {
             // perror("");
+            printError();
             exit(EXIT_FAILURE);
         }
 
@@ -370,6 +377,7 @@ void executeCommandRedirection(ParsedCommand* cmd) {
 
         if (execvp(cmd->commands[0][0], cmd->commands[0]) < 0) {
             // perror(cmd->commands[0][0]);
+            printError();
             exit(EXIT_FAILURE);
         }
     } else {
