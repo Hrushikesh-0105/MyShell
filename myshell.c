@@ -6,10 +6,9 @@
 #include <signal.h>			// signal()
 #include <fcntl.h>			// close(), open()
 
-#define MAX_COMMANDS 10 // Max number of commands separated by a delimiter (e.g., cmd1 && cmd2 && ...)
-#define MAX_ARGS 10     // Max number of arguments per command (e.g., ls -l -a)
+#define MAX_COMMANDS 10 // Max number of commands separated by a delimiter: cmd1 && cmd2 && ..
+#define MAX_ARGS 10     // Max number of arguments per command: ls -l -a
 
-// Enum to represent the type of operation
 typedef enum {
     SINGLE,
     SEQUENTIAL, // ##
@@ -18,22 +17,24 @@ typedef enum {
     REDIRECTION // >
 } CommandType;
 
-// Structure to hold all the parsed information from the user input
+// structure to hold all the parsed information from the user input
 typedef struct {
-    char* commands[MAX_COMMANDS][MAX_ARGS]; // Array of commands, each with its arguments
-    int num_commands;                       // Total number of commands found
-    CommandType type;                       // The type of operation
-    int redirection;                       // Is output redirection present or not
-    char* redirection_file;                 // Filename for redirection
+    char* commands[MAX_COMMANDS][MAX_ARGS]; // array of commands, each with its arguments
+    int num_commands;                       // total number of commands found
+    CommandType type;                       // the type of operation
+    int redirection;                       // is output redirection present or not
+    char* redirection_file;                 // filename for redirection
 } ParsedCommand;
 
 
-// Forward declarations for execution functions
-void executeCommand(ParsedCommand* cmd);
+//!problems
+// cd with file name with spaces not working: cd "os lab"
+
+void executeCommand(char* command[]);
+void executeSingleCommand(ParsedCommand* cmd);
 void executeParallelCommands(ParsedCommand* cmd);
 void executeSequentialCommands(ParsedCommand* cmd);
 void executeCommandRedirection(ParsedCommand* cmd);
-// Note: Pipe execution would need its own function, e.g., executePipeCommands(ParsedCommand* cmd);
 
 char* trimWhitespace(char* str) {
     if (!str) return NULL;
@@ -61,23 +62,59 @@ char* trimWhitespace(char* str) {
 
 //Ex: "  ls -a -l  " => {"ls", "-a", "-l"}
 void parseSingleCommand(char* command_str, char* command_args[MAX_ARGS]) {
-    int i = 0;
-    char* token;
-    command_str = trimWhitespace(command_str);
+    int arg_index = 0;
+    char* current_pos = command_str;
 
-    //split the string by spaces
-    while ((token = strsep(&command_str, " ")) != NULL && i < MAX_ARGS - 1) {
-        if (strlen(token) > 0) {
-            command_args[i] = token;
-            i++;
+    while (*current_pos != '\0' && arg_index < MAX_ARGS - 1) {
+        //skip leading whitespace before the next arg
+        while (*current_pos == ' ' || *current_pos == '\t') {
+            current_pos++;
+        }
+
+        // If at the end of the string, break
+        if (*current_pos == '\0') {
+            break;
+        }
+
+        //Check if the argument is quoted
+        if (*current_pos == '"') {
+            // This is a quoted argument
+            char* token_start = current_pos + 1; // The argument starts after the quote
+            command_args[arg_index++] = token_start;
+            
+            // Find the closing quote
+            char* end_quote = strchr(token_start, '"');
+            if (end_quote != NULL) {
+                // Found the closing quote. Terminate the string there.
+                *end_quote = '\0';
+                current_pos = end_quote + 1; // Continue parsing after the closing quote
+            } else {
+                // no closing quote found, treat the rest of the line as the argument
+                break;
+            }
+        } else {
+            // this is an unquoted arg
+            char* token_start = current_pos;
+            command_args[arg_index++] = token_start;
+
+            // find the next space or the end of the string
+            while (*current_pos != '\0' && *current_pos != ' ' && *current_pos != '\t') {
+                current_pos++;
+            }
+
+            // if we found a space,end the string there
+            if (*current_pos != '\0') {
+                *current_pos = '\0';
+                current_pos++; // for next loop
+            }
         }
     }
-    command_args[i] = NULL; // The command list must be terminated with null for execvp
+    command_args[arg_index] = NULL; // arg list ends with NULL
 }
 
 
-// Main parsing function, takes raw input and makes a struct out of it
-// Returns 1 on success, 0 on parsing error
+// main parsing function, takes raw input and makes a struct out of it
+// returns 1 on success, 0 on parsing error
 int parseInput(char* input, ParsedCommand* cmd) {
     // filling the struct with zeros
     memset(cmd, 0, sizeof(ParsedCommand));
@@ -105,33 +142,49 @@ int parseInput(char* input, ParsedCommand* cmd) {
         //if only single command, then just parse it
         cmd->num_commands = 1;
         parseSingleCommand(input, cmd->commands[0]);
-        if (cmd->commands[0][0] == NULL) { // Handle empty input
+        if (cmd->commands[0][0] == NULL) { // handle empty input
             cmd->num_commands = 0;
         }
     } else if (cmd->type == REDIRECTION) {
-        //redirection should have one command then one output file
+        // breaking it down into command and file path
         char* command_part = strsep(&input, ">");
-        char* file_part = input; // The rest of the string after the first >
+        char* file_part = input;
 
-        //trim both the parts
+        //trim whitespace of both parts
         command_part = trimWhitespace(command_part);
         file_part = trimWhitespace(file_part);
 
-        if (strlen(command_part) == 0 || strlen(file_part) == 0 || strstr(file_part, " ") != NULL) {
-            // no command or file name, or there is a space in the file part, so error
-            return 0;
+        // initial validation neither part can be empty
+        if (strlen(command_part) == 0 || strlen(file_part) == 0) {
+            return 0; //missing command or file name
         }
         
-        //checking for other special characters in command part
+        //no mixing of operators
         if (strstr(command_part, "##") || strstr(command_part, "&&") || strstr(command_part, "|")) {
             return 0; 
         }
 
+        int file_len = strlen(file_part);
+        if (file_part[0] == '"' && file_part[file_len - 1] == '"') {
+            // if the file path starts with quotes, as the names may have spaces inside
+            file_part[file_len - 1] = '\0';
+            cmd->redirection_file = file_part + 1;
+        } else {
+            // if the name doesnt have any quotes, but has spaces 
+            if (strstr(file_part, " ") != NULL) {
+                return 0;
+            }
+            cmd->redirection_file = file_part;
+        }
+
+        // ensure the resulting filename is not empty ex: ls > ""
+        if (strlen(cmd->redirection_file) == 0) {
+            return 0;
+        }
+        
         cmd->redirection = 1;
-        cmd->redirection_file = file_part;
         cmd->num_commands = 1;
         parseSingleCommand(command_part, cmd->commands[0]);
-
     } else {
         // This handles ##, &&, and |
         char* current_pos = input;
@@ -142,7 +195,7 @@ int parseInput(char* input, ParsedCommand* cmd) {
             char* token;
 
             if (delimiter_pos != NULL) {
-                // Found a delimiter. The token is the string before it.
+                // Found a delimiter,  The token is the string before it.
                 *delimiter_pos = '\0'; // Manually terminate the token string
                 token = current_pos;
                 // Move current_pos past the delimiter and the null terminator
@@ -155,7 +208,7 @@ int parseInput(char* input, ParsedCommand* cmd) {
 
             token = trimWhitespace(token);
             if (strlen(token) == 0) {
-                // Found an empty command between delimiters, e.g., "ls && && pwd"
+                // found an empty command between delimiters, ex: "ls && && pwd"
                 return 0;
             }
             
@@ -165,61 +218,44 @@ int parseInput(char* input, ParsedCommand* cmd) {
         
         cmd->num_commands = i;
         if (cmd->num_commands <= 1) {
-            // If we detected a delimiter but only parsed one command, it's an error
+            // if we detected a delimiter but only parsed one command, error
             return 0;
         }
     }
     return 1;
 }
 
-
-void printParsedCommand(ParsedCommand* cmd) {
-    if (cmd->num_commands == 0) {
-        return;
-    }
-
-    printf("--- Parsed Data ---\n");
-    switch(cmd->type) {
-        case SINGLE: printf("Type: SINGLE\n"); break;
-        case SEQUENTIAL: printf("Type: SEQUENTIAL (##)\n"); break;
-        case PARALLEL: printf("Type: PARALLEL (&&)\n"); break;
-        case PIPE: printf("Type: PIPE (|)\n"); break;
-        case REDIRECTION: printf("Type: REDIRECTION (>)\n"); break;
-    }
-
-    printf("Number of commands: %d\n", cmd->num_commands);
-    for (int i = 0; i < cmd->num_commands; i++) {
-        printf("  Command %d: ", i + 1);
-        for (int j = 0; cmd->commands[i][j] != NULL; j++) {
-            printf("\"%s\" ", cmd->commands[i][j]);
-        }
-        printf("\n");
-    }
-
-    if (cmd->redirection) {
-        printf("Redirection File: \"%s\"\n", cmd->redirection_file);
-    }
-    printf("-------------------\n");
-}
-
 void printError(){
     printf("Shell: Incorrect command\n");
 }
 
-void executeCommand(ParsedCommand* cmd){
+void resetSignalHandlers(){
+    // Reset signal handlers to their default behavior for the child.
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+}
 
-	printf("Executing single command: %s\n", cmd->commands[0][0]);
-    //executing the command
-    if(strcmp(cmd->commands[0][0],"cd")==0){
+void ignoreSignals(){
+    // SIGINT-> interrupt signal ctrl+c
+    // SIGTSTP-> stop signal, ctrl+z, we ignore this in parent
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+}
+
+
+//different exection functions
+void executeCommand(char* command[]){
+    if(strcmp(command[0],"cd")==0){
         // then the command is cd and it has to be handled separately
-        if(cmd->commands[0][1]==NULL){
+        if(command[1]==NULL){
             // then args of cd are missing
             printError();
         }
         else{
-            if(chdir(cmd->commands[0][1])!=0){
-                //error
-                perror(""); 
+            if(chdir(command[1])!=0){
+                //error occured while changing dir
+                // perror(command[0]); 
+                // printError();
             }
         }
     }
@@ -231,9 +267,10 @@ void executeCommand(ParsedCommand* cmd){
             return;
         }
         if(pid==0){
+            resetSignalHandlers();
             //child process
-            if(execvp(cmd->commands[0][0], cmd->commands[0])<0){
-                perror(cmd->commands[0][0]);
+            if(execvp(command[0], command)<0){
+                // perror(command[0]);
                 exit(EXIT_FAILURE);
             }
         }
@@ -243,32 +280,104 @@ void executeCommand(ParsedCommand* cmd){
     }
 }
 
-void executeParallelCommands(ParsedCommand* cmd)
-{
-	// This function will run multiple commands in parallel
-    // The commands are in cmd->commands[0], cmd->commands[1], etc.
-    // The number of commands is cmd->num_commands
-	printf("Executing %d parallel commands.\n", cmd->num_commands);
-    printParsedCommand(cmd);
+
+void executeSingleCommand(ParsedCommand* cmd){
+	// printf("Executing single command: %s\n", cmd->commands[0][0]);
+    executeCommand(cmd->commands[0]);
 }
 
-void executeSequentialCommands(ParsedCommand* cmd)
-{	
-	// This function will run multiple commands sequentially
-    // The commands are in cmd->commands[0], cmd->commands[1], etc.
-    // The number of commands is cmd->num_commands
-	printf("Executing %d sequential commands.\n", cmd->num_commands);
-    printParsedCommand(cmd);
+void executeSequentialCommands(ParsedCommand* cmd){	
+	// printf("Executing %d sequential commands.\n", cmd->num_commands);
+    int n=cmd->num_commands;
+    for(int i=0;i<n;i++){
+        executeCommand(cmd->commands[i]);
+    }
 }
 
-void executeCommandRedirection(ParsedCommand* cmd)
-{
-	// This function will run a single command with output redirected
-    // The command is in cmd->commands[0]
-    // The output file is in cmd->redirection_file
-	printf("Executing command '%s' with output redirected to '%s'\n", cmd->commands[0][0], cmd->redirection_file);
-    printParsedCommand(cmd);
+void executeParallelCommands(ParsedCommand* cmd){
+	// printf("Executing %d parallel commands.\n", cmd->num_commands);
+    // start all child processes first in one loop, then wait for all in a loop
+    int n=cmd->num_commands;
+    pid_t* pids = (pid_t*) malloc(sizeof(pid_t)*n);
+    
+    for(int i=0;i<n;i++){
+        if(strcmp(cmd->commands[i][0],"cd")==0){
+            // then the command is cd and it has to be handled separately
+            if(cmd->commands[i][1]==NULL){
+                // then args of cd are missing
+                printError();
+            }
+            else{
+                if(chdir(cmd->commands[i][1])!=0){
+                    //error occured while changing dir
+                    // perror(cmd->commands[i][0]); 
+                }
+            }
+            pids[i] = 0; // Mark this as not a forked process
+            continue;
+        }
+        pids[i]=fork();
+
+        if(pids[i]<0){
+            //fork failed
+            // perror("");
+            return;
+        }
+        
+        if (pids[i] == 0) {
+            // child process
+            resetSignalHandlers();
+            if (execvp(cmd->commands[i][0], cmd->commands[i]) < 0) {
+                // perror(cmd->commands[i][0]);
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    // now wait for all the processes in parent
+    for (int i = 0; i < n; i++) {
+        if (pids[i] > 0) {
+            waitpid(pids[i], NULL, 0);
+        }
+    }
+    free(pids);
+    pids=NULL;
 }
+
+
+void executeCommandRedirection(ParsedCommand* cmd) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        // perror("");
+        return;
+    }
+    if (pid == 0) {
+        resetSignalHandlers();
+        int fd = open(cmd->redirection_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            // If open fails, raise error
+            // perror("");
+            exit(EXIT_FAILURE);
+        }
+        //changing the stdout to file fd
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            // perror("");
+            exit(EXIT_FAILURE);
+        }
+
+        
+        //STDOUT_FILENO is now a copy of fd, so we dont need fd
+        close(fd);
+
+        if (execvp(cmd->commands[0][0], cmd->commands[0]) < 0) {
+            // perror(cmd->commands[0][0]);
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        //parent
+        wait(NULL);
+    }
+}
+
 
 void print_CWD(){
 	char* path=NULL;
@@ -294,8 +403,7 @@ int read_input(char **out_str) {
         nread--;
     }
 
-    // Note: The new parser handles leading/trailing whitespace, so this is not strictly needed anymore,
-    // but it's good practice to keep it.
+    //removing white spaces at start and end
     char *start = input;
     while (*start && *start==' ') {
         start++;
@@ -319,6 +427,9 @@ int main()
 	char *input = NULL;
     ParsedCommand cmd_data;
 
+    // ignore signals , ctrl+c and ctrl+z in parent
+    ignoreSignals();
+
 	while(1)
 	{
 		print_CWD();
@@ -337,7 +448,7 @@ int main()
             continue;
         }
 
-        // If parsing is successful but there are no commands (e.g., empty line), just show the prompt again.
+        //if input is empty
         if (cmd_data.num_commands == 0) {
             free(input);
             continue;
@@ -350,8 +461,7 @@ int main()
             break;
         }
 		
-        // Use the parsed command type to call the correct execution function
-        printf("Command parsed\n");
+        //acc to type of symbols execute particular functions
         switch(cmd_data.type) {
             case PARALLEL:
                 executeParallelCommands(&cmd_data);
@@ -363,17 +473,16 @@ int main()
                 executeCommandRedirection(&cmd_data);
                 break;
             case PIPE:
-                // executePipeCommands(&cmd_data); // You would implement this for the bonus part
-                printf("Pipes are not implemented yet.\n");
+                //yet to implement pipes
                 break;
             case SINGLE:
-                executeCommand(&cmd_data);
+                executeSingleCommand(&cmd_data);
                 break;
             default:{
                 printError();
             }
         }
-        free(input); // Free the input string for the next loop
+        free(input);
 	}
 	
 	return 0;
