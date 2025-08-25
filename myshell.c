@@ -35,6 +35,7 @@ void executeSingleCommand(ParsedCommand* cmd);
 void executeParallelCommands(ParsedCommand* cmd);
 void executeSequentialCommands(ParsedCommand* cmd);
 void executeCommandRedirection(ParsedCommand* cmd);
+void executePipeCommands(ParsedCommand* cmd);
 
 char* trimWhitespace(char* str) {
     if (!str) return NULL;
@@ -358,6 +359,7 @@ void executeCommandRedirection(ParsedCommand* cmd) {
     if (pid == 0) {
         resetSignalHandlers();
         int fd = open(cmd->redirection_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        // O_WRONLY: write mode,O_CREAT if doesnt exist then create, O_TRUNC if the file has contents then erase it, 0644 is permission setting: the owner can read and write, while the group and others can only read
         if (fd < 0) {
             // If open fails, raise error
             // perror("");
@@ -386,6 +388,83 @@ void executeCommandRedirection(ParsedCommand* cmd) {
     }
 }
 
+void executePipeCommands(ParsedCommand* cmd) {
+    int num_cmds = cmd->num_commands;
+    if (num_cmds <= 1) {
+        printError();
+        return;
+    }
+
+    int i = 0;
+    pid_t pid;
+    
+    int in_fd = STDIN_FILENO; 
+
+   
+    pid_t* pids = (pid_t*) malloc(sizeof(pid_t) * num_cmds);
+
+    for (i = 0; i < num_cmds; i++) {
+        int pipe_fd[2];
+
+        
+        if (i < num_cmds - 1) {
+            if (pipe(pipe_fd) < 0) {
+                printError();
+                return;
+            }
+        }
+
+        pid = fork();
+
+        if (pid < 0) {
+            printError();
+            return;
+        }
+
+        if (pid == 0) {
+            resetSignalHandlers();
+
+            
+            if (in_fd != STDIN_FILENO) {
+                dup2(in_fd, STDIN_FILENO);
+                close(in_fd); 
+            }
+
+           
+            if (i < num_cmds - 1) {
+                dup2(pipe_fd[1], STDOUT_FILENO);
+                close(pipe_fd[1]); 
+                close(pipe_fd[0]); 
+            }
+
+           
+            if (execvp(cmd->commands[i][0], cmd->commands[i]) < 0) {
+                printError();
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            
+            pids[i] = pid; 
+
+           
+            if (in_fd != STDIN_FILENO) {
+                close(in_fd);
+            }
+
+            if (i < num_cmds - 1) {
+                close(pipe_fd[1]); 
+                in_fd = pipe_fd[0]; 
+            }
+        }
+    }
+
+    
+    for (i = 0; i < num_cmds; i++) {
+        waitpid(pids[i], NULL, 0);
+    }
+    
+    free(pids);
+}
 
 void print_CWD(){
 	char* path=NULL;
@@ -481,7 +560,7 @@ int main()
                 executeCommandRedirection(&cmd_data);
                 break;
             case PIPE:
-                //yet to implement pipes
+                executePipeCommands(&cmd_data);
                 break;
             case SINGLE:
                 executeSingleCommand(&cmd_data);
