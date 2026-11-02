@@ -27,9 +27,6 @@ typedef struct {
 } ParsedCommand;
 
 
-//!problems
-// cd with file name with spaces not working: cd "os lab"
-
 void executeCommand(char* command[]);
 void executeSingleCommand(ParsedCommand* cmd);
 void executeParallelCommands(ParsedCommand* cmd);
@@ -408,11 +405,16 @@ void executePipeCommands(ParsedCommand* cmd) {
 
         
         if (i < num_cmds - 1) {
+            //create a new pipe , except for the last command
             if (pipe(pipe_fd) < 0) {
                 printError();
                 return;
             }
         }
+
+        // printf("In parent: pipe_fd read: %d\n", pipe_fd[0]);
+        // printf("In parent: pipe_fd write: %d\n", pipe_fd[1]);
+
 
         pid = fork();
 
@@ -424,13 +426,13 @@ void executePipeCommands(ParsedCommand* cmd) {
         if (pid == 0) {
             resetSignalHandlers();
 
-            
+            // we dont want the first command to read from buffer/pipe
             if (in_fd != STDIN_FILENO) {
                 dup2(in_fd, STDIN_FILENO);
                 close(in_fd); 
             }
 
-           
+            // we dont want the last command to write to buffer
             if (i < num_cmds - 1) {
                 dup2(pipe_fd[1], STDOUT_FILENO);
                 close(pipe_fd[1]); 
@@ -448,11 +450,11 @@ void executePipeCommands(ParsedCommand* cmd) {
 
            
             if (in_fd != STDIN_FILENO) {
-                close(in_fd);
+                close(in_fd);//close pipe inread parent
             }
 
             if (i < num_cmds - 1) {
-                close(pipe_fd[1]); 
+                close(pipe_fd[1]); // close pipe write in parent
                 in_fd = pipe_fd[0]; 
             }
         }
